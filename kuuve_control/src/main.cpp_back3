@@ -1,0 +1,196 @@
+/* Author : Hwancheol, Donghee */
+/* Date : 2017-05-19 3:00 */
+
+/* Main Controller Node */
+
+#include <iostream>
+#include <ros/ros.h>
+#include <ackermann_msgs/AckermannDriveStamped.h>
+#include <std_msgs/Time.h>
+#include <sensor_msgs/LaserScan.h>
+#include <std_msgs/Float32.h>
+#include <std_msgs/Int32.h>
+
+#define MODE_VISION_BASE 0 // 비젼 - 차선인식 모드
+#define MODE_VISION_PARKING 1 // 비젼 - 주차
+
+#define MODE_LIDAR_NARROW 2 // 라이더 - 협로
+#define MODE_LIDAR_CURVE 3 // 라이더 - 곡선 (협로보다 속도 감소)
+#define MODE_LIDAR_STATIC 4 // 라이더 - 정적 (협로 + 방향 바꾸기)
+#define MODE_LIDAR_DYNAMIC 5 // 라이더 - 동적 (협로 + 전방 탐지 범위 증가 + 최소 속력 0 + 스티어링은 비젼)
+#define MODE_LIDAR_PARKING 6 // 라이더 - 주차 (곡선 + 방향 바꾸기 + 일정시간 정차 + 후진)
+#define MODE_LIDAR_UTURN 7 // 라이더 - U턴
+
+#define MODE_GPS_REPAIRING 8// 	 GPS - 복구 모드(우선순위 최상위)
+#define MODE_VISION_CROSSLINE 9
+
+#define UTURN_SECOND 9.0
+#define PARKING_STEERING 10
+#define PARKING_SPEED 5
+#define PARKING_STEERING_TIME 3
+
+using namespace std;
+int laser_flag = 0;
+int uturn_flag = 0;
+
+ros::Publisher ackermann_pub;
+ros::Publisher mode_pub;
+ros::Publisher flag_pub;
+int mode_val = 0;
+bool mode_lock = false;
+/* for parking */
+double parking_distance;
+
+int base_speed;
+int base_steer;
+bool flags[10];
+void publish_mode(int mode) {
+	
+	std_msgs::Int32 msg;
+	msg.data = mode;
+	mode_pub.publish(msg);
+}
+void control_sec(ros::Duration _control_time, float _steering_angle, float _speed) {
+	
+	ackermann_msgs::AckermannDriveStamped ackermann_data;
+	ackermann_data.drive.steering_angle = _steering_angle;
+	ackermann_data.drive.speed = _speed;
+
+	
+	ros::Time start_time = ros::Time::now();
+	ros::Duration time_control(_control_time);
+	ros::Rate r(5);
+	while (ros::Time::now() - start_time < time_control) {
+		ackermann_pub.publish(ackermann_data);
+		ros::spinOnce();
+		cout << "steer: " << _steering_angle << " speed: " << _speed << endl;
+		r.sleep();
+	}
+	ackermann_data.drive.steering_angle = 0.0f;
+	ackermann_data.drive.speed = 0.0f;
+	ackermann_pub.publish(ackermann_data);
+	ros::spinOnce();
+}
+
+void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
+	ackermann_msgs::AckermannDriveStamped ackermann_data;
+	const int KP = 10;
+	int count = 0;
+	if (mode_val == MODE_LIDAR_UTURN) {
+		count = 0;
+		for (int i = 500; i < 580; i++) {
+			if (msg->ranges[i] < 2.65)
+				count++;
+		}
+		if (count > 20)
+			uturn_flag = 1;
+	}
+	if(uturn_flag == 1)
+		control_sec(ros::Duration(UTURN_SECOND), -28, 5);
+}
+
+void sign_callback(const std_msgs::Int32 sign) {
+	if (!mode_lock && (sign.data == 0 || !flags[sign.data])) {
+		mode_val = sign.data;
+		publish_mode(mode_val);
+		mode_lock = true;
+	}
+	switch (mode_val) {
+	case MODE_VISION_PARKING:
+		if (!flags[MODE_VISION_PARKING])
+			flags[MODE_VISION_PARKING] = true;
+		break;
+	case MODE_VISION_CROSSLINE:
+		if (!flags[MODE_VISION_CROSSLINE])
+			flags[MODE_VISION_CROSSLINE] = true;
+		break;
+	case MODE_LIDAR_NARROW:
+		if (!flags[MODE_LIDAR_NARROW])
+			flags[MODE_LIDAR_NARROW] = true;
+		break;
+	case MODE_LIDAR_CURVE:
+		if (!flags[MODE_LIDAR_CURVE])
+			flags[MODE_LIDAR_CURVE] = true;
+		break;
+	case MODE_LIDAR_STATIC:
+		if (!flags[MODE_LIDAR_STATIC])
+			flags[MODE_LIDAR_STATIC] = true;
+		break;
+	case MODE_LIDAR_UTURN:
+		if (!flags[MODE_LIDAR_UTURN])
+			flags[MODE_LIDAR_UTURN] = true;
+		break;
+	case MODE_LIDAR_DYNAMIC:
+		if (!flags[MODE_LIDAR_DYNAMIC])
+			flags[MODE_LIDAR_DYNAMIC] = true;
+		break;
+	}
+}
+
+void pid_callback(const ackermann_msgs::AckermannDriveStamped data) {
+	if (mode_val == MODE_LIDAR_NARROW || mode_val == MODE_LIDAR_CURVE || mode_val == MODE_LIDAR_STATIC || mode_val == MODE_LIDAR_PARKING)
+		ackermann_pub.publish(data);
+}
+void gps_callback(const ackermann_msgs::AckermannDriveStamped data) {
+	if (mode_val == MODE_GPS_REPAIRING)
+		ackermann_pub.publish(data);
+}
+void vision_callback(const ackermann_msgs::AckermannDriveStamped::ConstPtr& msg) {
+	ackermann_msgs::AckermannDriveStamped pub_msg;
+	pub_msg.drive.steering_angle = msg->drive.steering_angle;
+	pub_msg.drive.speed = msg->drive.speed;
+	base_speed = msg->drive.speed;
+	base_steer = msg->drive.steering_angle;
+	if(mode_val == MODE_VISION_BASE)
+		ackermann_pub.publish(pub_msg);
+	ROS_INFO("MODE : %d", mode_val);
+}
+void pid_zero_flag_callback(const std_msgs::Int32 flag) {
+	if (flag.data == 1) {
+		mode_lock = false;
+		mode_val = MODE_VISION_BASE;
+		publish_mode(mode_val);
+	}
+}
+void crossline_callback(const std_msgs::Int32 stop_flag) {
+	if (mode_val == MODE_VISION_CROSSLINE && stop_flag.data == 1) {
+		control_sec(ros::Duration(3.5), 0, 0);
+		mode_lock = false;
+		mode_val = MODE_VISION_BASE;
+		mode_lock = true;
+		publish_mode(mode_val);
+	}
+}
+void parking_line_callback(const std_msgs::Int32 lidar_flag) {
+	if (mode_val == MODE_VISION_PARKING && lidar_flag.data == 1) {
+		mode_lock = false;
+		mode_val = MODE_LIDAR_PARKING;
+		mode_lock = true;
+		publish_mode(mode_val);
+	}
+}
+void parking_direction_callback(const std_msgs::Int32 pd_flag) {
+	if (mode_val == MODE_LIDAR_PARKING && pd_flag.data == 1) {
+		control_sec(ros::Duration(1.0), 0, 10);
+		control_sec(ros::Duration(PARKING_STEERING_TIME), PARKING_STEERING, PARKING_SPEED);
+	}
+}
+int main(int argc, char** argv) {
+	ros::init(argc, argv, "Control_Manager");
+	ros::NodeHandle nh;
+	ros::Subscriber pid_zero_flagSub = nh.subscribe("zero_flag", 10, pid_zero_flag_callback);
+	ros::Subscriber signSub = nh.subscribe("sign", 1, sign_callback);
+	ros::Subscriber scanSub = nh.subscribe("scan", 10, laserCallback);
+	ros::Subscriber baseSub = nh.subscribe("vision_ackermann", 10, vision_callback);
+	ros::Subscriber pidSub = nh.subscribe("ackermann_lidar", 10, pid_callback);
+	ros::Subscriber gpsSub = nh.subscribe("ackermann_gps", 10, gps_callback);
+	ros::Subscriber crosslineSub = nh.subscribe("stop_line", 10, crossline_callback);
+	ros::Subscriber parkinglineSub = nh.subscribe("parking_detect", 10, parking_line_callback);
+	ros::Subscriber parkingdirectionSub = nh.subscribe("parking_direction", 10, parking_direction_callback);
+	ackermann_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("ackermann", 10);
+	mode_pub = nh.advertise<std_msgs::Int32>("mode", 10);
+	flag_pub = nh.advertise<std_msgs::Int32>("calc_flag", 1);
+  
+	ros::spin();
+	return 0;
+}

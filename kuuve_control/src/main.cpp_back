@@ -1,0 +1,167 @@
+#include <iostream>
+#include <ros/ros.h>
+#include <ackermann_msgs/AckermannDriveStamped.h>
+#include <std_msgs/Time.h>
+#include <sensor_msgs/LaserScan.h>
+#include <std_msgs/Float32.h>
+
+using namespace std;
+int laser_flag = 0;
+float lane_theta = 0.0;
+float prev_theta = 0.0f;
+ros::Publisher ackermann_pub;
+/*void timeCallback(const std_msgs::Time::ConstPtr& msg){
+	ROS_INFO("%d", msg->data);
+}
+
+void ackermannCallback(const ackermann_msgs::AckermannDriveStamped::ConstPtr& msg){
+	ROS_INFO("%f, %f", msg->drive.speed, msg->drive.steering_angle);
+}
+*/
+void control_sec(ros::Duration _control_time, float _steering_angle, float _speed){
+	ackermann_msgs::AckermannDriveStamped ackermann_data;
+	ackermann_data.drive.steering_angle = _steering_angle;
+	ackermann_data.drive.speed = _speed;
+
+	ros::NodeHandle nh;
+	ros::Publisher ackermann_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("ackermann", 10);
+	ros::Time start_time = ros::Time::now();
+	ros::Duration time_control(_control_time);
+	ros::Rate r(5);
+	while(ros::Time::now() - start_time < time_control){
+		ackermann_pub.publish(ackermann_data);
+		ros::spinOnce();
+		cout << "steer: " << _steering_angle << " speed: " << _speed << endl;
+		r.sleep();
+	}
+	ackermann_data.drive.steering_angle = 0.0f;
+	ackermann_data.drive.speed = 0.0f;
+	ackermann_pub.publish(ackermann_data);
+	ros::spinOnce();
+}
+/*void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg){
+	int count = 0;
+	laser_flag = 0;
+	ROS_INFO("TEST");
+
+	for(int i = 180; i < 209; i++){
+		if (msg->ranges[i] < 4.0)
+			count++;
+	}
+	if(count > 15)
+		laser_flag = 1;
+}
+void laserCallback2(const sensor_msgs::LaserScan::ConstPtr& msg){
+	int count = 0;
+	laser_flag = 0;
+	ROS_INFO("TEST");
+
+	for(int i = 540; i < 690; i++){
+		if (msg->ranges[i] < 3.5 && msg->ranges[i] > 0.01)
+			count++;
+	}
+	if(count > 3)
+		laser_flag = 1;
+}*/
+
+void laneCallback(const std_msgs::Float32::ConstPtr& theta_msg){
+	lane_theta = theta_msg->data;
+	
+	cout << "theta = " << lane_theta << endl;
+/*        if(lane_theta < -50 || lane_theta > 50)
+	    lane_theta = prev_theta;
+        else
+            prev_theta = lane_theta;
+*/
+
+}
+
+/*void parking(){
+	ros::NodeHandle nh;
+	ros::Publisher ackermann_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("ackermann", 10);
+	ackermann_msgs::AckermannDriveStamped ackermann_data;
+	laser_flag = 0;
+	ros::Subscriber scanSub;
+	while(!laser_flag){
+		ROS_INFO("TEST2");
+		scanSub=nh.subscribe<sensor_msgs::LaserScan>("/scan",10,laserCallback);
+		ackermann_data.drive.steering_angle = 0.0f;
+		ackermann_data.drive.speed = 4.0f;
+		ackermann_pub.publish(ackermann_data);
+		ros::spinOnce();
+	}
+	control_sec(ros::Duration(1.0), 0.0, 0.0);
+}
+
+void uturn(){
+	ros::NodeHandle nh;
+	ros::Publisher ackermann_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("ackermann", 10);
+	ackermann_msgs::AckermannDriveStamped ackermann_data;
+	laser_flag = 0;
+	ros::Subscriber scanSub;
+	scanSub=nh.subscribe<sensor_msgs::LaserScan>("/scan",10,laserCallback2);
+	while(!laser_flag){
+		ROS_INFO("TEST2");
+
+		ackermann_data.drive.steering_angle = 0.0f;
+		ackermann_data.drive.speed = 4.0f;
+		ackermann_pub.publish(ackermann_data);
+		ros::spinOnce();
+	}
+	control_sec(ros::Duration(1.0), 0.0, 0.0);
+}*/
+void laneTracing_sign(ros::Duration control_time, float speed){
+	ros::NodeHandle nh;
+	ros::Subscriber scanSub;
+	ros::Publisher ackermann_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("ackermann", 10);
+	ackermann_msgs::AckermannDriveStamped ackermann_data;
+	ros::Time start_time = ros::Time::now();
+	ros::Duration time_control(control_time);
+	ros::Rate r(50);
+	scanSub = nh.subscribe<std_msgs::Float32>("/send_theta",10,laneCallback);
+	while(1){
+		if(lane_theta < -70 || lane_theta > 70)
+		   lane_theta = lane_theta*0.3;
+		else
+		    prev_theta = lane_theta;
+		ackermann_data.drive.steering_angle = 0.8*lane_theta;
+		ackermann_data.drive.speed = speed;
+		ackermann_pub.publish(ackermann_data);
+		ros::spinOnce();
+	}
+	control_sec(ros::Duration(1.0), 0.0, 0.0);
+}
+void visionCallback(const ackermann_msgs::AckermannDriveStamped::ConstPtr& msg) {
+	ackermann_msgs::AckermannDriveStamped pub_msg;
+	pub_msg.drive.steering_angle = msg->drive.steering_angle;
+	pub_msg.drive.speed = msg->drive.speed;
+	ackermann_pub.publish(pub_msg);
+	ROS_INFO("speed : %d", msg->drive.speed);
+	ROS_INFO("steer : %d", msg->drive.steering_angle);
+}
+int main(int argc, char** argv){
+	ros::init(argc, argv, "control_sec");
+	ros::NodeHandle nh;
+	ros::Subscriber scanSub;
+	ackermann_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("ackermann", 10);
+	ros::Subscriber baseSub = nh.subscribe<ackermann_msgs::AckermannDriveStamped>("vision_ackermann", 10, visionCallback);
+
+/*parking---------------------------------------------
+	scanSub=nh.subscribe<sensor_msgs::LaserScan>("/scan",10,laserCallback);
+	parking();
+
+	control_sec(ros::Duration(5.0), 25.0, 7.0);
+	control_sec(ros::Duration(4.0), 0.0, 2.0);
+parking-------------------------------------------*/
+	//uturn
+	//uturn();
+	//control_sec(ros::Duration(9.4), -28.0, 8.0);
+	//control_sec(ros::Duration(1.5), 0.0, 8.0);
+	//control_sec(ros::Duration(2.4), 15.0, 8.0);
+	//control_sec(ros::Duration(5.0), 0.0, 0.0);
+	//laneTracing_sign(ros::Duration(5.0), 4.0f);
+//	control_sec(ros::Duration(5.0), 10.0, 2.0);
+//	control_sec(ros::Duration(1.0), 0.0, 0.0);
+	ros::spin();
+	return 0;
+}

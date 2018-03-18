@@ -1,0 +1,23 @@
+<launch>
+
+	<node name="sign_detect" pkg="sign" type="sign_detect.py"/>
+	<node name="classifier" pkg="ros_cam_six" type="classifier.py"/>
+
+
+	<group ns="camera">
+		<node name="image_proc" pkg="image_proc" type="image_proc"/>
+	</group>
+
+
+	<node name="trans_node" pkg="impro2_ackermann" type="trans_node"/>
+
+
+	<node name="abd_test" pkg="abd" type="abd_test"/>
+	<node name="scan_breakpoint" pkg="scan_breakpoint" type="scan_breakpoint"/>
+	<node name="scans_merger_node" pkg="obstacle_detector" type="scans_merger_node"/>
+	<node name="obstacle_extractor_node" pkg="obstacle_detector" type="obstacle_extractor_node"/>
+
+	<!--write_serial-->
+	<node name="write_serial" pkg="kuuve_control" type="write_serial"/>
+
+</launch>
